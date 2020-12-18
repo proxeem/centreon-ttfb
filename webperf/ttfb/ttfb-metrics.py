@@ -20,6 +20,8 @@
 import argparse
 import subprocess
 import shlex
+import pycurl
+from StringIO import StringIO
 
 
 #
@@ -49,6 +51,50 @@ def requestByCommand():
     }
 
 
+#
+# HTTP request with Python CURL library
+#
+def requestByPython():
+
+    curlLib = pycurl.Curl()
+    curlURL = args.proto + '://' + args.hostname + args.urlpath
+    curlBuffer = StringIO()
+    curlLib.setopt(curlLib.URL, curlURL)
+    curlLib.setopt(curlLib.WRITEFUNCTION, curlBuffer.write)
+    curlLib.setopt(curlLib.TIMEOUT, int(args.timeout))
+
+    try:
+        curlLib.perform()
+
+    except pycurl.error:
+        # Error while processing request
+        # Mainly timeout error or bad hostname
+        pass
+
+    httpCode = curlLib.getinfo(curlLib.RESPONSE_CODE)
+    timeNameLookup = curlLib.getinfo(curlLib.NAMELOOKUP_TIME)
+    timeConnect = curlLib.getinfo(curlLib.CONNECT_TIME)
+    timeAppConnect = curlLib.getinfo(curlLib.APPCONNECT_TIME)
+    timePreTransfer = curlLib.getinfo(curlLib.PRETRANSFER_TIME)
+    timeStartTransfer = curlLib.getinfo(curlLib.STARTTRANSFER_TIME)
+    timeTotal = curlLib.getinfo(curlLib.TOTAL_TIME)
+
+    curlLib.close()
+
+    if args.debug:
+        print str(httpCode).zfill(3) + '|' + str(timeNameLookup) + '|' + str(timeConnect) + '|' + str(timeAppConnect) + '|' + str(timePreTransfer) + '|' + str(timeStartTransfer) + '|' + str(timeTotal)
+
+    return {
+        'http_code': int(httpCode),
+        'time_namelookup': int(round(timeNameLookup * 1000)),
+        'time_connect': int(round(timeConnect * 1000)),
+        'time_appconnect': int(round(timeAppConnect * 1000)),
+        'time_pretransfer': int(round(timePreTransfer * 1000)),
+        'time_starttransfer': int(round(timeStartTransfer * 1000)),
+        'time_total': int(round(timeTotal * 1000))
+    }
+
+
 # Parse command line
 parser = argparse.ArgumentParser(description = 'TTFB Waterfall plugin for Centreon')
 parser.add_argument('-d', '--debug', help = 'Output debug information (do not use with Centreon)', action = 'store_true')
@@ -58,6 +104,7 @@ parser.add_argument('--urlpath', help = 'Relative URL', required=True)
 parser.add_argument('--warning', help = 'Response time warning level (in ms)', default='600')
 parser.add_argument('--critical', help = 'Response time critical level (in ms)', default='1200')
 parser.add_argument('--timeout', help = 'Request timeout', default='30')
+parser.add_argument('--http-backend', help = 'HTTP client', default='python')
 args = parser.parse_args()
 
 if args.debug:
@@ -69,7 +116,8 @@ if args.debug:
     print '---'
 
 # Make HTTP Request
-curlStats = requestByCommand()
+curlBackends = { 'python': requestByPython, 'curl': requestByCommand }
+curlStats = curlBackends[args.http_backend]()
 
 if args.debug:
     # All values below are in ms
@@ -113,7 +161,7 @@ if 200 <= curlStats['http_code'] < 300:
 else:
     # HTTP Response code KO (3xx, 4xx, 5xx or curl error)
     wfDNSLookup, wfTCPConnection, wfTLSHandshake, wfApplicationBackend, wfDataTransfert = 0, 0, 0, 0, 0
-    centreonStatusMessage = 'UNKNOWN: [' + str(curlStats['http_code']) + '] Invalid response code'
+    centreonStatusMessage = 'UNKNOWN: [' + str(curlStats['http_code']).zfill(3) + '] Invalid response code'
     centreonStatusCode = 3
 
 if args.debug:
